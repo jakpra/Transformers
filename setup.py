@@ -4,7 +4,7 @@ from setuptools import setup
 #     requirements = f.read().splitlines()
 
 setup(
-    name='Transformers',
+    name='KTransformers',
     version='0.0.0',
     # install_requires=requirements,
     packages=['Transformers'],

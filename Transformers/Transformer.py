@@ -142,10 +142,10 @@ class TransformerDecoder(nn.Module):
                 decoder_output = torch.cat([decoder_output, emb_t], dim=1)
                 output_probs = torch.cat([output_probs, prob_t.unsqueeze(1)], dim=1)
                 n_seps = n_seps + (class_t == sos_symbol).long()
-                incomplete = n_seps <= seq_lens
+                incomplete = n_seps <= seq_lens + 1
                 output_mask = torch.cat([output_mask, incomplete.unsqueeze(1)], dim=1)
-                if torch.all(~incomplete):
-                    break
+                # if torch.all(~incomplete):
+                #     break
 
         return output_probs, output_mask
 

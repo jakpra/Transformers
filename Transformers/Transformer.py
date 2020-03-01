@@ -78,7 +78,7 @@ class Transformer(nn.Module):
     def __init__(self, num_classes: int, encoder_heads: int = 8, decoder_heads: int = 8, encoder_layers: int = 6,
                  decoder_layers: int = 6, d_model: int = 300, d_intermediate: int = 128, dropout: float = 0.1,
                  device: str = 'cpu', activation: Callable[[Tensor], Tensor] = sigsoftmax,
-                 reuse_embedding: bool = True, predictor: Optional[nn.Module] = None) -> None:
+                 reuse_embedding: bool = True, predictor: Optional[nn.Module] = None, padding_index=0) -> None:
         self.device = device
         super(Transformer, self).__init__()
         self.encoder = Encoder(num_layers=encoder_layers, num_heads=encoder_heads, d_model=d_model,
@@ -88,7 +88,8 @@ class Transformer(nn.Module):
                                d_k=d_model // decoder_heads, d_v=d_model // decoder_heads,
                                d_intermediate=d_intermediate, dropout=dropout).to(self.device)
         self.embedding_matrix = torch.nn.Parameter(torch.rand(num_classes, d_model, device=device) * 0.02)
-        self.output_embedder = lambda x: F.embedding(x, self.embedding_matrix, padding_idx=0, scale_grad_by_freq=True)
+        # print(self.embedding_matrix.size())
+        self.output_embedder = lambda x: F.embedding(x, self.embedding_matrix, padding_idx=padding_index, scale_grad_by_freq=True)
         if reuse_embedding:
             self.predictor = lambda x: x@(self.embedding_matrix.transpose(1, 0) + 1e-10)
         elif predictor is not None:
@@ -110,10 +111,10 @@ class Transformer(nn.Module):
         decoder_output = self.decoder(DecoderInput(encoder_output=encoder_output.encoder_input,
                                                    encoder_mask=encoder_mask, decoder_input=decoder_input + pe_dec,
                                                    decoder_mask=decoder_mask))
-        prediction = self.predictor(decoder_output.decoder_input)
+        prediction = self.predictor(decoder_output.decoder_input)[:, :, :-1]  # never predict START
         return torch.log(self.activation(prediction))
 
-    def infer(self, encoder_input: Tensor, encoder_mask: LongTensor, sos_symbol: int) -> Tensor:
+    def infer(self, encoder_input: Tensor, encoder_mask: LongTensor, sos_symbol: int, sep_symbol: int, seq_lens: Tensor) -> Tensor:
         self.eval()
 
         with torch.no_grad():
@@ -127,12 +128,18 @@ class Transformer(nn.Module):
             inferer = infer_wrapper(self, encoder_output, encoder_mask, b)
             decoder_mask = make_mask((b, encoder_mask.shape[1], encoder_mask.shape[1])).to(self.device)
 
+            seps_predicted = torch.zeros(encoder_mask.shape[0], dtype=torch.long)
+
             for t in range(max_steps):
                 prob_t = inferer(decoder_output=decoder_output, t=t, decoder_mask=decoder_mask)
                 class_t = prob_t.argmax(dim=-1)
                 emb_t = self.output_embedder(class_t).unsqueeze(1) + pe[:, t + 1:t + 2, :]
                 decoder_output = torch.cat([decoder_output, emb_t], dim=1)
                 output_probs = torch.cat([output_probs, prob_t.unsqueeze(1)], dim=1)
+
+                seps_predicted = seps_predicted + (prob_t[:, :-1].argmax(dim=-1) == sep_symbol).long()
+                if torch.all(seps_predicted >= seq_lens):
+                    break
 
         return output_probs
 
@@ -143,7 +150,7 @@ class Transformer(nn.Module):
         decoder_step = self.decoder(DecoderInput(encoder_output=encoder_output, encoder_mask=encoder_mask,
                                                  decoder_input=decoder_output,
                                                  decoder_mask=decoder_mask[:, :t+1, :t+1])).decoder_input
-        prob_t = self.predictor(decoder_step[:, -1])
+        prob_t = self.predictor(decoder_step[:, -1])[:, :-1]
         return self.activation(prob_t)  # b, num_classes
 
     def vectorized_beam_search(self, encoder_input: Tensor, encoder_mask: LongTensor, sos_symbol: int,
@@ -206,6 +213,7 @@ class Transformer(nn.Module):
                 per_beam_paths = torch.cat([x[1].unsqueeze(0) for x in per_beam_top_k])
 
                 # tensor of shape K, K, B
+                per_beam_scores = per_beam_scores.transpose(1, 2)
                 masked_sentences = (encoder_mask[:, t + 1, t + 1] == 0).repeat(beam_width, beam_width, 1)  # TODO: .repeat(beam_width, 1, beam_width)
                 per_beam_scores[masked_sentences] = 0.
 

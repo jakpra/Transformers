@@ -128,7 +128,7 @@ class Transformer(nn.Module):
             inferer = infer_wrapper(self, encoder_output, encoder_mask, b)
             decoder_mask = make_mask((b, encoder_mask.shape[1], encoder_mask.shape[1])).to(self.device)
 
-            seps_predicted = torch.zeros(encoder_mask.shape[0], dtype=torch.long)
+            seps_predicted = torch.zeros(encoder_mask.shape[0], dtype=torch.long, device=self.device)
 
             for t in range(max_steps):
                 prob_t = inferer(decoder_output=decoder_output, t=t, decoder_mask=decoder_mask)

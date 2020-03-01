@@ -5,7 +5,7 @@ from setuptools import setup
 
 setup(
     name='KTransformers',
-    version='0.0.0',
+    version='0.0.0a',
     # install_requires=requirements,
     packages=['Transformers'],
     url='',

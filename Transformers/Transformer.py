@@ -107,6 +107,9 @@ class Transformer(nn.Module):
         n_out = decoder_input.shape[1]
         pe = PE(b, n, dk, dk, device=self.device)
         pe_dec = PE(b, n_out, dk, dk, device=self.device)
+        # print('encoder_input', encoder_input.size(), encoder_input[0])
+        # print('decoder_input', decoder_input.size(), decoder_input[0])
+
         encoder_output = self.encoder(EncoderInput(encoder_input + pe, encoder_mask[:, :n, :]))
         decoder_output = self.decoder(DecoderInput(encoder_output=encoder_output.encoder_input,
                                                    encoder_mask=encoder_mask, decoder_input=decoder_input + pe_dec,
@@ -114,21 +117,53 @@ class Transformer(nn.Module):
         prediction = self.predictor(decoder_output.decoder_input)[:, :, :-1]  # never predict START
         return torch.log(self.activation(prediction))
 
-    def infer(self, encoder_input: Tensor, encoder_mask: LongTensor, sos_symbol: int, sep_symbol: int, seq_lens: Tensor) -> Tensor:
+    # def infer(self, encoder_input: Tensor, encoder_mask: LongTensor, sos_symbol: int, sep_symbol: int, seq_lens: Tensor) -> Tensor:
+    #     self.eval()
+    #
+    #     with torch.no_grad():
+    #         b, n, dk = encoder_input.shape
+    #         max_steps = encoder_mask.shape[1]
+    #         pe = PE(b, max_steps, dk, dk, device=self.device)
+    #         encoder_output = self.encoder(EncoderInput(encoder_input + pe[:, :n], encoder_mask[:, :n, :])).encoder_input
+    #         sos_symbols = (torch.ones(b) * sos_symbol).long().to(self.device)
+    #         decoder_output = self.output_embedder(sos_symbols).unsqueeze(1) + pe[:, 0:1, :]
+    #         output_probs = torch.Tensor().to(self.device)
+    #         inferer = infer_wrapper(self, encoder_output, encoder_mask, b)
+    #         decoder_mask = make_mask((b, encoder_mask.shape[1], encoder_mask.shape[1])).to(self.device)
+    #
+    #         seps_predicted = torch.zeros(encoder_mask.shape[0], dtype=torch.long, device=self.device)
+    #
+    #         for t in range(max_steps):
+    #             prob_t = inferer(decoder_output=decoder_output, t=t, decoder_mask=decoder_mask)
+    #             class_t = prob_t.argmax(dim=-1)
+    #             emb_t = self.output_embedder(class_t).unsqueeze(1) + pe[:, t + 1:t + 2, :]
+    #             decoder_output = torch.cat([decoder_output, emb_t], dim=1)
+    #             output_probs = torch.cat([output_probs, prob_t.unsqueeze(1)], dim=1)
+    #
+    #             input(f'{class_t[0]}, {sep_symbol}')
+    #
+    #             seps_predicted = seps_predicted + (prob_t[:, :-1].argmax(dim=-1) == sep_symbol).long()
+    #             if torch.all(seps_predicted >= seq_lens):
+    #                 input('breaking')
+    #                 break
+    #
+    #     return output_probs
+
+    def infer(self, encoder_input: Tensor, encoder_mask: LongTensor, sos_symbol: int) -> Tensor:
         self.eval()
 
         with torch.no_grad():
             b, n, dk = encoder_input.shape
             max_steps = encoder_mask.shape[1]
             pe = PE(b, max_steps, dk, dk, device=self.device)
+            # print('encoder_input', encoder_input.size(), encoder_input[0])
             encoder_output = self.encoder(EncoderInput(encoder_input + pe[:, :n], encoder_mask[:, :n, :])).encoder_input
             sos_symbols = (torch.ones(b) * sos_symbol).long().to(self.device)
+            # print('decoder_input', sos_symbols.size(), sos_symbols)
             decoder_output = self.output_embedder(sos_symbols).unsqueeze(1) + pe[:, 0:1, :]
             output_probs = torch.Tensor().to(self.device)
             inferer = infer_wrapper(self, encoder_output, encoder_mask, b)
             decoder_mask = make_mask((b, encoder_mask.shape[1], encoder_mask.shape[1])).to(self.device)
-
-            seps_predicted = torch.zeros(encoder_mask.shape[0], dtype=torch.long, device=self.device)
 
             for t in range(max_steps):
                 prob_t = inferer(decoder_output=decoder_output, t=t, decoder_mask=decoder_mask)
@@ -137,11 +172,17 @@ class Transformer(nn.Module):
                 decoder_output = torch.cat([decoder_output, emb_t], dim=1)
                 output_probs = torch.cat([output_probs, prob_t.unsqueeze(1)], dim=1)
 
-                seps_predicted = seps_predicted + (prob_t[:, :-1].argmax(dim=-1) == sep_symbol).long()
-                if torch.all(seps_predicted >= seq_lens):
-                    break
-
         return output_probs
+
+    # def infer_one(self, encoder_output: Tensor, encoder_mask: LongTensor, decoder_output: Tensor,
+    #               t: int, b: int, decoder_mask: Optional[LongTensor] = None) -> Tensor:
+    #     if decoder_mask is None:
+    #         decoder_mask = make_mask((b, t + 1, t + 1)).to(self.device)
+    #     decoder_step = self.decoder(DecoderInput(encoder_output=encoder_output, encoder_mask=encoder_mask,
+    #                                              decoder_input=decoder_output,
+    #                                              decoder_mask=decoder_mask[:, :t+1, :t+1])).decoder_input
+    #     prob_t = self.predictor(decoder_step[:, -1])  # [:, :-1]
+    #     return self.activation(prob_t)  # b, num_classes
 
     def infer_one(self, encoder_output: Tensor, encoder_mask: LongTensor, decoder_output: Tensor,
                   t: int, b: int, decoder_mask: Optional[LongTensor] = None) -> Tensor:
@@ -149,7 +190,7 @@ class Transformer(nn.Module):
             decoder_mask = make_mask((b, t + 1, t + 1)).to(self.device)
         decoder_step = self.decoder(DecoderInput(encoder_output=encoder_output, encoder_mask=encoder_mask,
                                                  decoder_input=decoder_output,
-                                                 decoder_mask=decoder_mask[:, :t+1, :t+1])).decoder_input
+                                                 decoder_mask=decoder_mask[:, :t + 1, :t + 1])).decoder_input
         prob_t = self.predictor(decoder_step[:, -1])[:, :-1]
         return self.activation(prob_t)  # b, num_classes
 

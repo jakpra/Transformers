@@ -123,6 +123,54 @@ def noam_scheme(_step: int, d_model: int, warmup_steps: int, batch_size: int = 2
     return d_model**-0.5 * min(_step**-0.5, _step*warmup_steps**-1.5) * batch_size/2048
 
 
+class Scheduler(object):
+    def __init__(self, opt: torch.optim.Optimizer, schedule: Callable[[int], float], param_group_scales: Sequence[float] = (1,)):
+        assert len(param_group_scales) == len(opt.param_groups)
+        self.opt = opt
+        self.schedule = schedule
+        self.step_num = 0
+        self.lr = 0
+        self.param_group_scales = param_group_scales
+
+    def step(self) -> None:
+        self.step_num += 1
+        self.lr = self.schedule(self.step_num)
+        for i, p in enumerate(self.opt.param_groups):
+            p['lr'] = self.lr * self.param_group_scales[i]
+        self.opt.step()
+
+    def zero_grad(self) -> None:
+        self.opt.zero_grad()
+
+
+def make_cosine_schedule(max_lr: float, warmup_steps: int, decay_over: int) -> Callable[[int], float]:
+    """
+        Makes a schedule that increases the lr from 0 to max_lr over warmup_steps,
+        then reduces it to 0 over decay_over steps.
+    """
+    linear_factor = max_lr / warmup_steps
+    cos_window = make_cosine_window(max_lr, warmup_steps, decay_over)
+
+    def cosine_schedule(step: int) -> float:
+        if step < warmup_steps:
+            return linear_factor * step
+        else:
+            return cos_window(step)
+
+    return cosine_schedule
+
+
+def make_cosine_window(max_lr: float, offset: int, decay_over: int) -> Callable[[int], float]:
+    f = 90 / decay_over
+    b = - f * offset
+
+    def schedule(step: int) -> float:
+        angle = f * step + b
+        return math.cos(math.radians(angle)) * max_lr
+
+    return schedule
+
+
 class FuzzyLoss(object):
     def __init__(self, loss_fn: Callable[[Tensor, Tensor], Tensor], num_classes: int,
                  mass_redistribution: float, ignore_index: int = 0) -> None:
